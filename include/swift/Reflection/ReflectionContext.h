@@ -101,6 +101,9 @@ class ReflectionContext
   std::vector<MemoryReader::ReadBytesResult> savedBuffers;
   std::vector<std::tuple<RemoteAddress, RemoteAddress>> imageRanges;
 
+  bool supportsPriorityEscalation = false;
+  bool setupTargetPointers = false;
+
 public:
   using super::getBuilder;
   using super::readDemanglingForContextDescriptor;
@@ -1380,20 +1383,50 @@ public:
 
   std::pair<llvm::Optional<std::string>, StoredPointer>
   asyncTaskSlabPtr(StoredPointer AsyncTaskPtr) {
-    using AsyncTask = AsyncTask<Runtime>;
+    loadTargetPointers();
 
-    auto AsyncTaskBytes =
-        getReader().readBytes(RemoteAddress(AsyncTaskPtr), sizeof(AsyncTask));
-    auto *AsyncTaskObj =
-        reinterpret_cast<const AsyncTask *>(AsyncTaskBytes.get());
-    if (!AsyncTaskObj)
-      return {std::string("failure reading async task"), 0};
+    if (supportsPriorityEscalation) {
+      using AsyncTask = AsyncTask<Runtime,ActiveTaskStatusWithEscalation<Runtime>>;
+      auto AsyncTaskBytes =
+          getReader().readBytes(RemoteAddress(AsyncTaskPtr), sizeof(AsyncTask));
+      auto *AsyncTaskObj =
+          reinterpret_cast<const AsyncTask *>(AsyncTaskBytes.get());
+      if (!AsyncTaskObj)
+        return {std::string("failure reading async task"), 0};
 
-    StoredPointer SlabPtr = AsyncTaskObj->PrivateStorage.Allocator.FirstSlab;
-    return {llvm::None, SlabPtr};
+      StoredPointer SlabPtr = AsyncTaskObj->PrivateStorage.Allocator.FirstSlab;
+      return {llvm::None, SlabPtr};
+
+    } else {
+      using AsyncTask = AsyncTask<Runtime, ActiveTaskStatusWithoutEscalation<Runtime>>;
+
+      auto AsyncTaskBytes =
+          getReader().readBytes(RemoteAddress(AsyncTaskPtr), sizeof(AsyncTask));
+      auto *AsyncTaskObj =
+          reinterpret_cast<const AsyncTask *>(AsyncTaskBytes.get());
+      if (!AsyncTaskObj)
+        return {std::string("failure reading async task"), 0};
+
+      StoredPointer SlabPtr = AsyncTaskObj->PrivateStorage.Allocator.FirstSlab;
+      return {llvm::None, SlabPtr};
+    }
   }
 
 private:
+  void loadTargetPointers() {
+     if (setupTargetPointers)
+       return;
+
+     auto supportsPriorityEscalationAddr = getReader().getSymbolAddress("_swift_concurrency_debug_supportsPriorityEscalation");
+     if (!supportsPriorityEscalationAddr) {
+       setupTargetPointers = true;
+       return;
+     }
+     getReader().readInteger(supportsPriorityEscalationAddr, &supportsPriorityEscalation);
+
+     setupTargetPointers = true;
+  }
+
   const TypeInfo *
   getClosureContextInfo(StoredPointer Context, const ClosureContextInfo &Info,
                         remote::TypeInfoProvider *ExternalTypeInfo) {
