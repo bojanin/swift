@@ -1006,6 +1006,13 @@ static AsyncTask *swift_task_suspendImpl() {
 }
 
 SWIFT_CC(swift)
+static void
+swift_task_enqueueTaskOnExecutorImpl(AsyncTask *task, ExecutorRef executor)
+{
+  task->flagAsEnqueuedOnExecutor(executor);
+}
+
+SWIFT_CC(swift)
 static AsyncTask *swift_continuation_initImpl(ContinuationAsyncContext *context,
                                               AsyncContinuationFlags flags) {
   context->Flags = AsyncContextKind::Continuation;
